@@ -36,7 +36,7 @@ QByteArray AppMessage::encoded() {
     }
     return binData;
 }
-// ALLIANCE_GET_SCIENCE
+
 std::optional<AppMessage> AppMessage::decode(QBuffer &buffer, int &bytesRequired)
 {
     bytesRequired = 12;

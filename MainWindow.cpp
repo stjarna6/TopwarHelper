@@ -28,7 +28,7 @@ MainWindow::MainWindow(QWidget *parent)
         pair<seconds, QString> runIntervalOptions[] = {
             {60s*30, u"30分钟"_s},
             {60s*60, u"60分钟"_s},
-            {60s*60, u"120分钟"_s},
+            {60s*120, u"120分钟"_s},
         };
         for (const auto& [interval, text] : runIntervalOptions) {
             ui->runIntervalComboBox->addItem(text, interval.count());
@@ -88,6 +88,7 @@ MainWindow::MainWindow(QWidget *parent)
     ui->changeServerButton->hide();
     connect(ui->changeServerButton, &QPushButton::clicked, this, &MainWindow::openChangeServerDialog);
     connect(ui->consumeCoinButton, &QPushButton::clicked, this, &MainWindow::openConsumeCoinDialog);
+    ui->consumeCoinButton->hide();
 
     topwarHelper = make_unique<TopwarHelper>();
     unique_ptr<GameSessionInfo> session = topwarHelper->readSavedSession();
@@ -105,6 +106,8 @@ MainWindow::MainWindow(QWidget *parent)
         connect(dlg, &QDialog::finished, this, [this, dlg](int result) {
             dlg->deleteLater();
             if (result != QDialog::Accepted) {
+                isForcedClose = true;
+                QTimer::singleShot(0, this, &QMainWindow::close);
                 return;
             }
             qDebug() << "wx login success." << dlg->getCode();
@@ -202,6 +205,11 @@ void MainWindow::showUserInfo(int warzone, const QString &username) {
 
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    if (isForcedClose) {
+        event->accept();
+        return;
+    }
+
     auto ret = QMessageBox::question(this, u"" APP_NAME ""_s, u"确认关闭"_s);
     if (ret == QMessageBox::Yes) {
         event->accept();

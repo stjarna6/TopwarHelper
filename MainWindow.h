@@ -28,6 +28,7 @@ private:
     void openConsumeCoinDialog();
 
     Ui::MainWindow *ui;
+    bool isForcedClose{false};
     unique_ptr<TopwarHelper> topwarHelper;
 };
 
