@@ -110,12 +110,25 @@ void TopwarHelper::loginBySession(unique_ptr<GameSessionInfo> session) {
     }
 
     conn = make_unique<GameConnection>(gameVersion, *session);
+    connect(conn.get(), &GameConnection::connectionClosed, this, [this] {
+        QTimer::singleShot(0, this, [this] {
+            runTaskTimer.stop();
+            logoutTimer.stop();
+            conn.reset();
+        });
+    });
     connect(conn.get(), &GameConnection::loginSucceeded, this, [this] {
-        saveSession();
         getMainWindow()->showUserInfo(conn->getWarzone(), conn->getUsername());
-        int wantedServerId = Config::get(Config::KeyWarzone).toInt();
-        if (wantedServerId != 0 && conn->getSessionInfo().serverId != wantedServerId) {
-            conn->changeServer(wantedServerId);
+        if (conn->getWarzone() == 0) {
+            log() << u"登录失败，问题待解决"_s;
+            return;
+        }
+
+        saveSession();
+
+        int wantedWarzone = Config::get(Config::KeyWarzone).toInt();
+        if (wantedWarzone != 0 && conn->getWarzone() != wantedWarzone) {
+            conn->changeServer(wantedWarzone);
             return;
         }
 
@@ -142,22 +155,21 @@ void TopwarHelper::logoutAndScheduleLogin() {
         return;
     }
 
-    if (conn->getLastRqstTimepoint() + KeepAliveTime < SteadyClockNow()) {
-        connect(conn.get(), &GameConnection::connectionClosed, this, [this] {
-            QTimer::singleShot(0, this, [this]{ conn.reset(); });
-        });
-        ws.close();
-
-        auto nextScheduleTime = SteadyClockMax;
-        for (const auto& [id, task] : scheduleTaskMap) {
-            nextScheduleTime = std::min(nextScheduleTime, task.time);
-        }
-        if (nextScheduleTime != SteadyClockMax) {
-            auto t = (nextScheduleTime - SteadyClockNow()) - ReservedLoginTime;
-            loginTimer.start(std::max(DurationCast::round<seconds>(t), 120s));
-        }
-    } else {
+    if (SteadyClockNow() < conn->getLastRqstTimepoint() + KeepAliveTime) {
         QTimer::singleShot(0, this, &TopwarHelper::runTask);
+        return;
+    }
+
+    gameVersion = QString{};
+    ws.close();
+
+    auto nextScheduleTime = SteadyClockMax;
+    for (const auto& [id, task] : scheduleTaskMap) {
+        nextScheduleTime = std::min(nextScheduleTime, task.time);
+    }
+    if (nextScheduleTime != SteadyClockMax) {
+        auto t = (nextScheduleTime - SteadyClockNow()) - ReservedLoginTime;
+        loginTimer.start(std::max(DurationCast::round<seconds>(t), 120s));
     }
 }
 

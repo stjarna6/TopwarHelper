@@ -70,7 +70,7 @@ private:
     void sendHeartbeat();
     void processBinaryMessage(const QByteArray &msg);
     void recvLoginResponse(const QJsonObject &resp);
-    void reConnect();
+    void reConnect(const QString &serverUrl);
     void changeServerReConnect();
     void recvUpdateResource(const QJsonObject &resp);
     void recvUpdateBuildingInfo(const QJsonObject &resp);

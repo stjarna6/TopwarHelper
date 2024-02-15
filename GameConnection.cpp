@@ -82,18 +82,23 @@ GameConnection::GameConnection(const QString &gameVer, const GameSessionInfo &se
 
     connect(&webSock, &QWebSocket::disconnected, this, [this] {
         if (isClosedByServer) {
-            log() << userDesc() << "服务器关闭了连接";
-            return;
-        } else {
-            log() << userDesc() << "断开连接";
+            log() << userDesc() << u"服务器关闭了连接"_s;
+        } else if (getWarzone() != 0) {
+            log() << userDesc() << u"断开连接"_s;
         }
 
-        if (changeServerSession != nullptr && !changeServerSession->serverInfoToken.isEmpty()) {
+        if (changeServerSession == nullptr) {
+            emit connectionClosed();
+            return;
+        }
+
+        if (userInfo[u"isCross"_s].toInt() == 1) {
+            reConnect(changeServerSession->serverUrl);
+            changeServerSession.reset();
+        }  else {
+            reConnect(changeServerSession->serverUrl);
             this->sessionInfo = std::move(*changeServerSession);
             changeServerSession.reset();
-            reConnect();
-        } else {
-            emit connectionClosed();
         }
     });
 
@@ -125,11 +130,11 @@ GameConnection::GameConnection(const QString &gameVer, const GameSessionInfo &se
     heartbeatTimer.callOnTimeout(this, &GameConnection::sendHeartbeat);
 }
 
-void GameConnection::reConnect() {
+void GameConnection::reConnect(const QString &serverUrl) {
     callbackBySeq.clear();
     rqstCnt = 0;
     nextBytesRequired = 0;
-    webSock.open(sessionInfo.serverUrl + u"?b=1"_s);
+    webSock.open(serverUrl + u"?b=1"_s);
 }
 
 const GameSessionInfo& GameConnection::getSessionInfo() const {
@@ -207,6 +212,11 @@ void GameConnection::processBinaryMessage(const QByteArray &data) {
     }
     recvBuffer.remove(0, buf.pos());
 
+    if (msg->format == BinaryDataPackFormatProtobuf) {
+        qDebug() << "unhandled protobuf msg";
+        return;
+    }
+
     lastServerTime = milliseconds{msg->data[u"t"_s].toInteger()};
     auto respData = QJsonDocument::fromJson(msg->data[u"d"_s].toString().toUtf8()).object();
     if (respData.isEmpty()) {
@@ -235,7 +245,7 @@ void GameConnection::processBinaryMessage(const QByteArray &data) {
             callback(respData);
         }
     } else {
-        // qDebug() << "unhandled response message." << "seq:" << msg->seq
+        // qDebug() << "unhandled message." << "seq:" << msg->seq
         //          << "rqstId:" << rqstIdToString(msg->rqstId) << "content:" << respData;;
     }
 }
@@ -245,12 +255,16 @@ void GameConnection::sendHeartbeat() {
 }
 
 void GameConnection::sendLogin() {
+    int serverId = sessionInfo.serverId;
+    if (userInfo[u"isCross"_s].toInt() == 1) {
+        serverId = userInfo[u"sid"_s].toInt();
+    }
     QJsonObject args{
         {u"token"_s, sessionInfo.serverInfoToken},
         {u"platformVer"_s, gameVersion},
         {u"appVersion"_s, gameVersion},
         {u"pbClientVer"_s, gameVersion},
-        {u"serverId"_s, sessionInfo.serverId},
+        {u"serverId"_s, serverId},
         {u"serverInfoToken"_s, sessionInfo.serverInfoToken},
         {u"temp_id"_s, sessionInfo.tempId},
         {u"ua"_s, QString{HttpRqst::GetUserAgentPC()}},
@@ -273,7 +287,15 @@ void GameConnection::sendLogin() {
 
 void GameConnection::recvLoginResponse(const QJsonObject &resp) {
     userInfo = resp;
-    log() << userDesc() << u"登录成功"_s;
+    if (userInfo[u"isCross"_s].toInt() == 1) {
+        changeServerSession = make_unique<GameSessionInfo>(sessionInfo);
+        changeServerSession->serverId = resp[u"sid"_s].toInt();
+        changeServerSession->serverUrl = resp[u"wsurl"_s].toString();
+        webSock.close();
+        return;
+    }
+
+    log() << userDesc() << u"连接成功"_s;
 
     constexpr int AutoCollectBuildingId = 1801;
     for (const auto &obj : resp[u"buildings"_s].toArray()) {
@@ -332,7 +354,7 @@ void GameConnection::changeServer(int wantedServerId) {
             }
         }
         if (uid == 0) {
-            log() << "切换战区：用户在战区 S" << wantedServerId << "无账号";
+            log() << u"切换战区：用户在战区 S"_s << wantedServerId << u"无账号"_s;
             return;
         }
 
@@ -369,7 +391,7 @@ void GameConnection::recvUpdateBuildingInfo(const QJsonObject &resp) {
         }
     }
     if (consumeTarget != 0.0) {
-        QTimer::singleShot(250ms, this, [this]{ sendDeleteTrainingArmy(); });
+        QTimer::singleShot(20ms, this, [this]{ sendDeleteTrainingArmy(); });
     }
 }
 
@@ -511,7 +533,7 @@ void GameConnection::sendDeleteTrainingArmy() {
     QJsonObject data{{u"cancel"_s, armyList}};
     sendRequest(TopwarRqstId::ARMY_CANCEL_PRODUCE_ALL, data, [this](auto &&resp) {
         armyBuildingMap.clear();
-        QTimer::singleShot(250ms, this, [this]{ sendBatchBuild(); });
+        QTimer::singleShot(20ms, this, [this]{ sendBatchBuild(); });
     });
 }
 
