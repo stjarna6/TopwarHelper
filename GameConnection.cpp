@@ -298,14 +298,14 @@ void GameConnection::recvLoginResponse(const QJsonObject &resp) {
     log() << userDesc() << u"连接成功"_s;
 
     constexpr int AutoCollectBuildingId = 1801;
-    for (const auto &obj : resp[u"buildings"_s].toArray()) {
+    for (const auto buildings = resp[u"buildings"_s].toArray(); const auto obj : buildings) {
         if (obj[u"buildingId"_s].toInt() == AutoCollectBuildingId) {
             autoCollectMachineId = obj[u"id"_s].toString();
             break;
         }
     }
 
-    for (const auto &obj : resp[u"energy"_s].toArray()) {
+    for (const auto energyList = resp[u"energy"_s].toArray(); const auto obj : energyList) {
         int energyType = obj[u"type"_s].toInt();
         int currentPoint = obj[u"point"_s].toInt();
 
@@ -384,9 +384,9 @@ void GameConnection::recvUpdateResource(const QJsonObject &resp) {
 }
 
 void GameConnection::recvUpdateBuildingInfo(const QJsonObject &resp) {
-    for (const auto &&obj : resp[u"updateBuilds"_s].toArray()) {
+    for (const auto builds = resp[u"updateBuilds"_s].toArray(); const auto obj : builds) {
         QString buildId = obj[u"id"_s].toString();
-        for (const auto &&armyId : obj[u"productIds"_s].toArray()) {
+        for (const auto ids = obj[u"productIds"_s].toArray(); const auto armyId : ids) {
             armyBuildingMap[armyId.toString()] = buildId;
         }
     }
@@ -468,7 +468,7 @@ void GameConnection::obtainVideoReward() {
     sendRequest(TopwarRqstId::VideoRewardGet, data, [this](auto &&resp) {
         int obtainedTimesToday = resp[u"dayGoldVideoCount"_s].toInt();
         userInfo[u"dayGoldVideoCount"_s] = obtainedTimesToday;
-        log() << userDesc() << u"获取观影奖励 "_s
+        log() << userDesc() << u"获取广告奖励 "_s
               << resp[u"resource"_s][u"resource"_s][u"gold"_s].toInt() << u" 钻石"_s
               << u"（今日已获取"_s << obtainedTimesToday << u"/20）"_s;
     });

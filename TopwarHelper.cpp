@@ -379,7 +379,7 @@ void TopwarHelper::checkDeepSeaTreasure(const QJsonObject &obj) {
     int aid = obj[u"id"_s].toInt();
     std::vector<int64_t> slotEndTime;
     slotEndTime.reserve(3);
-    for (const auto &slot : obj[u"extra"_s][u"slots"_s].toArray()) {
+    for (const auto slotList = obj[u"extra"_s][u"slots"_s].toArray(); const auto slot : slotList) {
         slotEndTime.push_back(slot[u"et"_s].toInteger());
     }
 
