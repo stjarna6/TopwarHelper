@@ -19,8 +19,6 @@ public:
     void loginByToken(const QString &token);
     void loginBySession(unique_ptr<GameSessionInfo> session);
     void onWantedWarzoneChanged(int warzone);
-    void doDailyTasks();
-    void doDailyAllianceTasks();
     void consumeCoin(QByteArray batchBuildData, double coin);
 
     using SteadyTimepoint = std::chrono::time_point<std::chrono::steady_clock>;
@@ -43,15 +41,20 @@ public:
 
 private:
     void doRqstGameVersion();
-    void logoutAndScheduleLogin();
-    void addTask(milliseconds t, std::function<void()> callback);
-    // Note: do not call this function directly in the task callback of the same id
+    void logoutIfIdle();
+    void scheduleLogin();
+
     void addScheduleTask(int id, milliseconds t, std::function<void()> callback);
+    void addTask(milliseconds t, std::function<void()> callback);
+
     void taskAdded(milliseconds t);
     void runTask();
 
+    void doDailyTasks();
+    void doDailyAllianceTasks();
     void checkActivity();
     void checkDeepSeaTreasure(const QJsonObject &obj);
+    void checkWxShareReward();
 
     HttpRqst::AbortHandler httpRqstAborter;
     QString gameVersion;

@@ -48,6 +48,7 @@ public:
     void sendAllianceDonateScience(int scienceId, int times);
     void sendGetWorldSiteInfo(ResponseCallback callback);
     void sendGetActivityData(ResponseCallback callback);
+    void sendNotifyWxShare(ResponseCallback callback);
 
     void changeServer(int wantedServerId);
     void donateAllianceScience(int scienceId);
@@ -58,6 +59,7 @@ public:
     void consumeCoinByTrainArmy(QJsonObject bathBuildData, double coinToconsume);
     void obtainAwardExploreSea(int activityId, int slotIdx, bool restart = true);
     void startExploreSea(int activityId, int slotIdx);
+    void obtainWxShareReward();
 
 signals:
     void loginSucceeded();
@@ -85,6 +87,7 @@ private:
 
     milliseconds heartbeatInterval{10'000ms};
     QTimer heartbeatTimer;
+    bool connected{false};
     bool isClosedByServer{false};
 
     int rqstCnt{0};

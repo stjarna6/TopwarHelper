@@ -76,16 +76,20 @@ GameConnection::GameConnection(const QString &gameVer, const GameSessionInfo &se
     : gameVersion{gameVer}, sessionInfo{sessionInfo}, webSock{u"https://warh5.rivergame.net"_s}
 {
     connect(&webSock, &QWebSocket::connected, this, [this] {
+        connected = true;
         sendLogin();
         heartbeatTimer.start();
     });
 
     connect(&webSock, &QWebSocket::disconnected, this, [this] {
-        if (isClosedByServer) {
+        if (!connected) {
+            log() << u"连接失败"_s;
+        } else if (isClosedByServer) {
             log() << userDesc() << u"服务器关闭了连接"_s;
         } else if (getWarzone() != 0) {
             log() << userDesc() << u"断开连接"_s;
         }
+        connected = false;
 
         if (changeServerSession == nullptr) {
             emit connectionClosed();
@@ -551,4 +555,20 @@ void GameConnection::sendBatchBuild() {
 
 void GameConnection::sendGetActivityData(ResponseCallback callback) {
     sendRequest(TopwarRqstId::GET_ACTIVITY_DATA, {}, std::move(callback));
+}
+
+constexpr int WxShareRewardActId = 102701;
+void GameConnection::sendNotifyWxShare(ResponseCallback callback) {
+    QJsonObject data{{u"activity_id"_s, WxShareRewardActId}};
+    sendRequest(TopwarRqstId::SHARE_GIFT_NOTIC, data, std::move(callback));
+}
+
+void GameConnection::obtainWxShareReward() {
+    QJsonObject data{{u"activity_id"_s, WxShareRewardActId}};
+    sendRequest(TopwarRqstId::SHARE_GIFT_GET_COUNT_REWARD, data, [this](const QJsonObject &resp) {
+        auto rewardItem = resp[u"reward"_s][u"items"_s].toArray().first();
+        int itemId = rewardItem["itemId"].toInt();
+        int count = rewardItem["itemCount"].toInt();
+        log() << userDesc() << u"获取微信分享奖励："_s << getItemName(itemId) << "x" << count;
+    });
 }

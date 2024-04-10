@@ -33,7 +33,7 @@ void Config::init() {
         data->insert(KeyWarzone, 0);
     }
     if (!data->contains(KeyRunInterval)) {
-        data->insert(KeyRunInterval, 60*60);
+        data->insert(KeyRunInterval, RunIntervalDefault);
     }
     if (!data->contains(KeyScienceDonatePrefer)) {
         data->insert(KeyScienceDonatePrefer, 0);

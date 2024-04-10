@@ -16,7 +16,7 @@ TopwarHelper::TopwarHelper() {
     doRqstGameVersion();
 
     logoutTimer.setSingleShot(true);
-    logoutTimer.callOnTimeout(this, &TopwarHelper::logoutAndScheduleLogin);
+    logoutTimer.callOnTimeout(this, &TopwarHelper::logoutIfIdle);
 
     loginTimer.setSingleShot(true);
     loginTimer.callOnTimeout(this, [this]{ loginBySession(readSavedSession());});
@@ -98,9 +98,6 @@ void TopwarHelper::loginByToken(const QString &token) {
 }
 
 void TopwarHelper::loginBySession(unique_ptr<GameSessionInfo> session) {
-    // if login fails, we can still run later
-    loginTimer.start(seconds{Config::get(Config::KeyRunInterval).toInt(120)});
-
     if (gameVersion.isEmpty()) {
         pendingLoginSession = std::move(session);
         if (!httpRqstAborter.isValid()) {
@@ -110,13 +107,6 @@ void TopwarHelper::loginBySession(unique_ptr<GameSessionInfo> session) {
     }
 
     conn = make_unique<GameConnection>(gameVersion, *session);
-    connect(conn.get(), &GameConnection::connectionClosed, this, [this] {
-        QTimer::singleShot(0, this, [this] {
-            runTaskTimer.stop();
-            logoutTimer.stop();
-            conn.reset();
-        });
-    });
     connect(conn.get(), &GameConnection::loginSucceeded, this, [this] {
         getMainWindow()->showUserInfo(conn->getWarzone(), conn->getUsername());
         if (conn->getWarzone() == 0) {
@@ -141,17 +131,18 @@ void TopwarHelper::loginBySession(unique_ptr<GameSessionInfo> session) {
             runTask();
         }
     });
+    connect(conn.get(), &GameConnection::connectionClosed, this, [this] {
+        QTimer::singleShot(0, this, [this] {
+            conn.reset();
+            runTaskTimer.stop();
+            logoutTimer.stop();
+            scheduleLogin();
+        });
+    });
 }
 
-void TopwarHelper::logoutAndScheduleLogin() {
-    if (conn == nullptr) {
-        return;
-    }
-
-    auto &ws = conn->getWebSocket();
-    if (!ws.isValid()) {
-        loginTimer.start(TaskMaxPendingTime);
-        conn.reset();
+void TopwarHelper::logoutIfIdle() {
+    if (conn == nullptr || !conn->getWebSocket().isValid()) {
         return;
     }
 
@@ -161,20 +152,24 @@ void TopwarHelper::logoutAndScheduleLogin() {
     }
 
     gameVersion = QString{};
-    ws.close();
+    conn->getWebSocket().close();
+}
 
-    auto nextScheduleTime = SteadyClockMax;
-    for (const auto& [id, task] : scheduleTaskMap) {
-        nextScheduleTime = std::min(nextScheduleTime, task.time);
-    }
-    if (nextScheduleTime != SteadyClockMax) {
+void TopwarHelper::scheduleLogin() {
+    if (!scheduleTaskMap.empty()) {
+        auto nextScheduleTime = SteadyClockMax;
+        for (const auto& [id, task] : scheduleTaskMap) {
+            nextScheduleTime = std::min(nextScheduleTime, task.time);
+        }
         auto t = (nextScheduleTime - SteadyClockNow()) - ReservedLoginTime;
-        loginTimer.start(std::max(DurationCast::round<seconds>(t), 120s));
+        loginTimer.start(DurationCast::round<seconds>(t));
+    } else {
+        // unexpected
+        loginTimer.start(120s); // retry
     }
 }
 
 void TopwarHelper::onWantedWarzoneChanged(int warzone) {
-    currLoginTaskQueue = {};
     scheduleTaskMap.clear();
     if (conn == nullptr || !conn->getWebSocket().isValid()) {
         loginTimer.stop();
@@ -193,44 +188,33 @@ void TopwarHelper::addTask(milliseconds t, std::function<void()> callback) {
 }
 
 void TopwarHelper::addScheduleTask(int id, milliseconds t, std::function<void()> callback) {
-    scheduleTaskMap[id] = Task{SteadyClockNow() + t, std::move(callback)};
-    taskAdded(t);
+    QTimer::singleShot(0, this, [this, id, t, callback=std::move(callback)] {
+        scheduleTaskMap[id] = Task{SteadyClockNow() + t, std::move(callback)};
+        if (t < TaskMaxPendingTime && conn != nullptr && conn->getWebSocket().isValid()) {
+            taskAdded(t);
+        } else if (loginTimer.isActive() && t < loginTimer.remainingTimeAsDuration()) {
+            loginTimer.start(t);
+        }
+    });
 }
 
 void TopwarHelper::taskAdded(milliseconds t) {
-    if (conn != nullptr && conn->getWebSocket().isValid() && t < TaskMaxPendingTime) {
-        if (logoutTimer.isActive()) {
-            logoutTimer.stop();
-            runTaskTimer.start(t);
-        } else if (!runTaskTimer.isActive() || t < runTaskTimer.remainingTimeAsDuration()) {
-            runTaskTimer.start(t);
-        }
-    } else {
-        t = std::max(t - ReservedLoginTime, 0ms);
-        if (!loginTimer.isActive() || t < loginTimer.remainingTimeAsDuration()) {
-            loginTimer.start(t);
-        }
+    if (logoutTimer.isActive()) {
+        logoutTimer.stop();
+        runTaskTimer.start(t);
+    } else if (runTaskTimer.isActive() && t < runTaskTimer.remainingTimeAsDuration()) {
+        runTaskTimer.start(t);
     }
 }
 
 void TopwarHelper::runTask() {
     if (!conn->getWebSocket().isValid()) {
         logoutTimer.start(0);
+        return;
     }
 
     auto now = SteadyClockNow();
     SteadyTimepoint nextTaskTime = SteadyClockMax;
-
-    while (!currLoginTaskQueue.empty()) {
-        auto &task = currLoginTaskQueue.top();
-        if (task.time < now + 10ms) {
-            task.callback();
-            currLoginTaskQueue.pop();
-        } else {
-            nextTaskTime = task.time;
-            break;
-        }
-    }
 
     for (auto it = scheduleTaskMap.begin(); it != scheduleTaskMap.end(); ) {
         auto &[id, task] = *it;
@@ -245,8 +229,20 @@ void TopwarHelper::runTask() {
         }
     }
 
+    while (!currLoginTaskQueue.empty()) {
+        auto &task = currLoginTaskQueue.top();
+        if (task.time < now + 10ms) {
+            task.callback();
+            currLoginTaskQueue.pop();
+        } else {
+            nextTaskTime = task.time;
+            break;
+        }
+    }
+
     if (nextTaskTime == SteadyClockMax) {
-        logoutTimer.start(KeepAliveTime);
+        auto t = (conn->getLastRqstTimepoint() + KeepAliveTime + 500ms - SteadyClockNow());
+        logoutTimer.start(std::max(DurationCast::round<milliseconds>(t), 0ms));
     } else {
         auto t = nextTaskTime - SteadyClockNow();
         runTaskTimer.start(std::max(DurationCast::round<milliseconds>(t), 0ms));
@@ -261,26 +257,27 @@ void TopwarHelper::consumeCoin(QByteArray batchBuildData, double coin) {
 }
 
 void TopwarHelper::doDailyTasks() {
-    QTimer::singleShot(0, this, [this] {
-        seconds interval{Config::get(Config::KeyRunInterval).toInt(120)};
-        addScheduleTask(DailyTaskId, interval, [this]{ doDailyTasks(); });
-    });
+    seconds interval{Config::get(Config::KeyRunInterval).toInt(Config::RunIntervalDefault)};
+    addScheduleTask(DailyTaskId, interval, [this]{ doDailyTasks(); });
 
     checkActivity();
 
-    addTask(1s, [this]{ conn->executeAutoCollectMachine(); });
+    addTask(100ms, [this]{ conn->executeAutoCollectMachine(); });
 
-    for (int i = conn->getUserInfo()[u"secretTreasure"_s].toInt(); i < 5; i++) {
-        addTask(1s+100ms*i, [this]{ conn->obtainSecretTreasure(); });
-    }
-
-    if (conn->getUserInfo()[u"dayGoldVideoCount"_s].toInt() < 20) {
-        addTask(2s, [this]{ conn->obtainVideoReward(); });
-        addTask(32s, [this]{ conn->obtainVideoReward(); });
-    }
     if (conn->getAllianceId() != 0) {
         doDailyAllianceTasks();
     }
+
+    for (int i = conn->getUserInfo()[u"secretTreasure"_s].toInt(); i < 5; i++) {
+        addTask(3000ms + 100ms*i, [this]{ conn->obtainSecretTreasure(); });
+    }
+
+    int doAdRewardCnt = 20 - conn->getUserInfo()[u"dayGoldVideoCount"_s].toInt();
+    for (int i = 0; i < doAdRewardCnt; i++) {
+        addTask(3500ms + 40s * i, [this]{ conn->obtainVideoReward(); });
+    }
+
+    addTask(4000ms, [this]{ checkWxShareReward(); });
 }
 
 void TopwarHelper::doDailyAllianceTasks() {
@@ -290,7 +287,7 @@ void TopwarHelper::doDailyAllianceTasks() {
         int level;
         int exp;
     };
-    addTask(3s, [this] {
+    addTask(200ms, [this] {
         conn->sendGetWorldSiteInfo([this](auto &&resp) {
             int preferred = Config::get(Config::KeyWorldSiteDonatePrefer).toInt();
             int64_t userAid = conn->getAllianceId();
@@ -324,7 +321,7 @@ void TopwarHelper::doDailyAllianceTasks() {
         });
     });
 
-    addTask(4s, [this] {
+    addTask(1000ms, [this] {
         conn->sendGetAllianceScienceInfo([this](auto &&resp) {
             int recommended = 0;
             int preferred = Config::get(Config::KeyScienceDonatePrefer).toInt();
@@ -360,7 +357,7 @@ void TopwarHelper::doDailyAllianceTasks() {
     });
 
     if (QDate::currentDate().dayOfWeek() == 1 && Config::get(Config::KeyDonateCoinConsume).toBool()) {
-        addTask(6s, [this]{ conn->donateAllianceScience(AllianceScience::快速作战); });
+        addTask(2000ms, [this]{ conn->donateAllianceScience(AllianceScience::快速作战); });
     }
 }
 
@@ -400,4 +397,18 @@ void TopwarHelper::checkDeepSeaTreasure(const QJsonObject &obj) {
         auto t = nextTime - serverTime;
         addScheduleTask(TopwarRqstId::AWARD_EXPLORE_SEA, t, [this]{ checkActivity(); });
     }
+}
+
+void TopwarHelper::checkWxShareReward() {
+    conn->sendNotifyWxShare([this](const QJsonObject &resp) {
+        int shareCnt = resp[u"day_share_count"_s].toInt(3);
+        if (shareCnt < 3) {
+            checkWxShareReward();
+        } else {
+            int rewardCnt = resp[u"day_share_reward_count"].toInt();
+            for (int i = rewardCnt; i < 4; i++) {
+                conn->obtainWxShareReward();
+            }
+        }
+    });
 }

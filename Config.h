@@ -4,6 +4,8 @@
 
 namespace Config
 {
+constexpr int RunIntervalDefault = 60 * 60;
+
 constexpr QLatin1StringView KeyWarzone{"warzone"};
 constexpr QLatin1StringView KeyRunInterval{"RunInterval"};
 constexpr QLatin1StringView KeyScienceDonatePrefer{"ScienceDonatePrefer"};

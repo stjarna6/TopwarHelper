@@ -2,6 +2,34 @@
 
 static QString _s;
 
+QString getItemName(int itemId) {
+    switch (itemId) {
+    case 1000005: return u"钻石50"_s;
+    case 1000006: return u"钻石100"_s;
+
+    case 1800001: return u"科技宝箱"_s;
+    case 3300001: return u"金币宝箱"_s;
+
+    case 1700011: return u"1级强化部件宝箱"_s;
+    case 1700012: return u"2级强化部件宝箱"_s;
+    case 1700013: return u"3级强化部件宝箱"_s;
+
+    case 1700030: return u"1级强化部件宝箱(新)"_s;
+    case 1700031: return u"2级强化部件宝箱(新)"_s;
+    case 1700032: return u"3级强化部件宝箱(新)"_s;
+
+    case 2100001: return u"普通招募券"_s;
+    case 2100002: return u"高级招募券"_s;
+    case 2100005: return u"精英抽卡券"_s;
+
+    case 2300002: return u"紫色万能碎片"_s;
+    case 2300003: return u"橙色万能碎片"_s;
+
+    default:
+        return u"item_"_s + QString::number(itemId);
+    }
+}
+
 std::vector<pair<int, QString>> allianceScienceValue {
     {0,     u"未知"_s},
 

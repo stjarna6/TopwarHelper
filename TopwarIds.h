@@ -41,6 +41,10 @@ const char* QEnumToString (const QEnum value) {
     return QMetaEnum::fromType<QEnum>().valueToKey(value);
 }
 
+
+QString getItemName(int itemId);
+
+
 namespace AllianceScience {
 enum {
     Unknown = 0,
