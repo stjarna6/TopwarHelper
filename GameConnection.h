@@ -8,7 +8,6 @@
 #include "GameSessionRqst.h"
 #include "TopwarIds.h"
 
-
 class AppMessage {
 public:
     int seq;
@@ -49,8 +48,11 @@ public:
     void sendGetWorldSiteInfo(ResponseCallback callback);
     void sendGetActivityData(ResponseCallback callback);
     void sendNotifyWxShare(ResponseCallback callback);
+    void sendClickShareBox(const QJsonObject &shareBox);
+    void sendGetShareBoxReward(int level, int boxId);
 
-    void changeServer(int wantedServerId);
+    void changeServer(int serverId);
+    void changeServer(int serverId, int64_t uid, const QString &serverUrl);
     void donateAllianceScience(int scienceId);
     void donateWorldSite(int siteId);
     void executeAutoCollectMachine();

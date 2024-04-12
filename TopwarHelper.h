@@ -6,12 +6,15 @@
 template <class T>
 using MinHeap = std::priority_queue<T, std::vector<T>, std::greater<T>>;
 
+class ActivityShareBoxContext;
+
 class TopwarHelper: public QObject
 {
     Q_OBJECT
 
 public:
     TopwarHelper();
+    ~TopwarHelper();
 
     unique_ptr<GameSessionInfo> readSavedSession();
     void saveSession();
@@ -55,11 +58,14 @@ private:
     void checkActivity();
     void checkDeepSeaTreasure(const QJsonObject &obj);
     void checkWxShareReward();
+    void checkShareBox(const QJsonObject &obj);
+    void handleShareBoxLogin();
 
     HttpRqst::AbortHandler httpRqstAborter;
     QString gameVersion;
     QString pendingLoginToken;
     unique_ptr<GameSessionInfo> pendingLoginSession;
+    unique_ptr<ActivityShareBoxContext> shareBoxCtx;
 
     MinHeap<Task> currLoginTaskQueue;
     std::map<int, Task> scheduleTaskMap;

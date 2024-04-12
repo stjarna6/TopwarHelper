@@ -97,6 +97,7 @@ GameConnection::GameConnection(const QString &gameVer, const GameSessionInfo &se
         }
 
         if (userInfo[u"isCross"_s].toInt() == 1) {
+            // see GameConnection::recvLoginResponse()
             reConnect(changeServerSession->serverUrl);
             changeServerSession.reset();
         }  else {
@@ -348,33 +349,40 @@ void GameConnection::sendChangeServer(int serverId, int64_t uid, ResponseCallbac
     sendRequest(TopwarRqstId::CHANGE_SERVER, data, callback);
 }
 
-void GameConnection::changeServer(int wantedServerId) {
-    sendGetUserServerList([this, wantedServerId](auto &&resp) {
+void GameConnection::changeServer(int serverId) {
+    sendGetUserServerList([this, serverId](auto &&resp) {
         int64_t uid = 0;
         for (const auto &obj : resp[u"serverList"_s].toArray()) {
-            if (obj[u"serverId"_s].toInt() == wantedServerId) {
+            if (obj[u"serverId"_s].toInt() == serverId) {
                 uid = obj[u"uid"_s].toInteger();
                 break;
             }
         }
         if (uid == 0) {
-            log() << u"切换战区：用户在战区 S"_s << wantedServerId << u"无账号"_s;
+            log() << u"切换战区：用户在战区 S"_s << serverId << u"无账号"_s;
             return;
         }
 
-        changeServerSession = make_unique<GameSessionInfo>();
-        changeServerSession->serverId = wantedServerId;
+        QString serverUrl;
         for (const auto &obj : resp[u"showServerList"_s][u"serverList"_s].toArray()) {
-            if (obj[u"id"_s].toInt() == wantedServerId) {
-                changeServerSession->serverUrl = obj[u"url"_s].toString();
+            if (obj[u"id"_s].toInt() == serverId) {
+                serverUrl = obj[u"url"_s].toString();
                 break;
             }
         }
-        changeServerSession->tempId = sessionInfo.tempId;
-        sendChangeServer(wantedServerId, uid, [this](auto &&resp) {
-            changeServerSession->serverInfoToken = resp[u"serverInfoToken"_s].toString();
-            changeServerReConnect();
-        });
+
+        changeServer(serverId, uid, serverUrl);
+    });
+}
+
+void GameConnection::changeServer(int serverId, int64_t uid, const QString &serverUrl) {
+    changeServerSession = make_unique<GameSessionInfo>();
+    changeServerSession->serverId = serverId;
+    changeServerSession->serverUrl = serverUrl;
+    changeServerSession->tempId = sessionInfo.tempId;
+    sendChangeServer(serverId, uid, [this](auto &&resp) {
+        changeServerSession->serverInfoToken = resp[u"serverInfoToken"_s].toString();
+        changeServerReConnect();
     });
 }
 
@@ -570,5 +578,32 @@ void GameConnection::obtainWxShareReward() {
         int itemId = rewardItem["itemId"].toInt();
         int count = rewardItem["itemCount"].toInt();
         log() << userDesc() << u"获取微信分享奖励："_s << getItemName(itemId) << "x" << count;
+    });
+}
+
+void GameConnection::sendClickShareBox(const QJsonObject &shareBox) {
+    sendRequest(TopwarRqstId::ClickSharebox, shareBox, [this](const QJsonObject &resp) {
+        log() << userDesc() << u"天降宝箱帮助成功"_s;
+    });
+}
+
+void GameConnection::sendGetShareBoxReward(int level, int boxId) {
+    QJsonObject data{
+        {u"aid"_s, 10},
+        {u"tid"_s, boxId},
+        {u"type"_s, 0}
+    };
+    sendRequest(TopwarRqstId::GET_SHAREBOX_ACTIVITY_REWARD, data, [this,level](const QJsonObject &resp) {
+        const auto reward = resp[u"reward"_s].toObject();
+        QString rewardStr;
+        if (int gold = reward[u"resource"_s][u"gold"_s].toInt(); gold != 0) {
+            rewardStr = u"%1钻石"_s.arg(gold);
+        } else {
+            const auto item = reward[u"items"_s].toArray().first().toObject();
+            int itemId = item[u"itemId"_s].toInt();
+            int count = item[u"itemCount"_s].toInt();
+            rewardStr = u"%1x%2"_s.arg(getItemName(itemId)).arg(count);
+        }
+        log() << userDesc() << u"打开%1星天降宝箱获得："_s.arg(level) << rewardStr;
     });
 }

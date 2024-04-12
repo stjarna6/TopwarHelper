@@ -12,6 +12,28 @@ constexpr auto TaskMaxPendingTime = 120s;
 constexpr int DailyTaskId = 0;
 
 
+struct ChangeServerParam {
+    int serverId;
+    int64_t uid;
+    QString serverUrl;
+
+    ChangeServerParam() = default;
+
+    ChangeServerParam(int serverId, int64_t uid, const QString& serverUrl)
+        : serverId{serverId}, uid{uid}, serverUrl{serverUrl}
+    {}
+};
+
+class ActivityShareBoxContext {
+public:
+    QJsonObject shareBoxObj;
+    ChangeServerParam origServer;
+    QList<ChangeServerParam> changeServerQueue;
+};
+
+
+TopwarHelper::~TopwarHelper() = default;
+
 TopwarHelper::TopwarHelper() {
     doRqstGameVersion();
 
@@ -116,13 +138,17 @@ void TopwarHelper::loginBySession(unique_ptr<GameSessionInfo> session) {
 
         saveSession();
 
+        if (shareBoxCtx != nullptr) {
+            handleShareBoxLogin();
+            return;
+        }
+
         int wantedWarzone = Config::get(Config::KeyWarzone).toInt();
         if (wantedWarzone != 0 && conn->getWarzone() != wantedWarzone) {
             conn->changeServer(wantedWarzone);
             return;
         }
 
-        loginTimer.stop();
         currLoginTaskQueue = {};
         if (!scheduleTaskMap.contains(DailyTaskId)) {
             doDailyTasks();
@@ -162,7 +188,7 @@ void TopwarHelper::scheduleLogin() {
             nextScheduleTime = std::min(nextScheduleTime, task.time);
         }
         auto t = (nextScheduleTime - SteadyClockNow()) - ReservedLoginTime;
-        loginTimer.start(DurationCast::round<seconds>(t));
+        loginTimer.start(std::max(DurationCast::round<seconds>(t), 120s));
     } else {
         // unexpected
         loginTimer.start(120s); // retry
@@ -364,9 +390,11 @@ void TopwarHelper::doDailyAllianceTasks() {
 void TopwarHelper::checkActivity() {
     conn->sendGetActivityData([this](auto &&resp){
         for (const auto &obj : resp[u"alist"_s].toArray()) {
-            QString name = obj[u"showUiType"_s].toString();
-            if (name == u"ActivityDeepSeaTreasure"_s) {
+            QString uiName = obj[u"showUiType"_s].toString();
+            if (uiName == u"ActivityDeepSeaTreasure"_s) {
                 checkDeepSeaTreasure(obj.toObject());
+            } else if (uiName == u"ActivityShareBox"_s) {
+                checkShareBox(obj.toObject());
             }
         }
     });
@@ -411,4 +439,93 @@ void TopwarHelper::checkWxShareReward() {
             }
         }
     });
+}
+
+void TopwarHelper::checkShareBox(const QJsonObject &obj) {
+    const auto boxes = obj[u"atarget"_s].toArray();
+    int num = boxes.first()[u"num"_s].toInt();
+    for (int i = 0; i < boxes.size(); i++) {
+        const auto box = boxes.at(i);
+        int state = box[u"state"_s].toInt();
+        if (state <= 1) {
+            num -= box[u"target"_s].toInt();
+        }
+    }
+
+    if (num >= 0) {
+        for (int i = 0; i < boxes.size(); i++) {
+            const auto box = boxes.at(i);
+            int state = box[u"state"_s].toInt();
+            if (state > 1) {
+                continue;
+            }
+            conn->sendGetShareBoxReward(i + 1, box[u"id"_s].toInt());
+        }
+        return;
+    }
+
+    conn->sendGetUserServerList([this](const QJsonObject &resp) {
+        const auto userServerList = resp[u"serverList"_s].toArray();
+        if (userServerList.size() < 6) {
+            return;
+        }
+
+        QHash<int, QString> serverUrlMap;
+        const auto visibleServerList = resp[u"showServerList"_s][u"serverList"_s].toArray();
+        for (const auto serverObj : visibleServerList) {
+            serverUrlMap[serverObj[u"id"_s].toInt()] = serverObj[u"url"_s].toString();
+        }
+
+        shareBoxCtx = make_unique<ActivityShareBoxContext>();
+        int64_t currUid = conn->getUserInfo()[u"gameUid"_s].toInteger();
+        for (const auto userObj : userServerList) {
+            int serverId = userObj[u"serverId"_s].toInt();
+            int64_t uid = userObj[u"uid"_s].toInteger();
+            if (uid == currUid) {
+                shareBoxCtx->origServer = {serverId, uid, serverUrlMap[serverId]};
+            } else {
+                shareBoxCtx->changeServerQueue.emplace_back(serverId, uid, serverUrlMap[serverId]);
+            }
+        }
+
+        QString uidStr = QString::number(currUid);
+        QString dateStr = QString::number(conn->getLastServerTime().count());
+        QJsonObject query{
+            {u"adtype"_s, "pangolin"},
+            {u"doShareTime"_s, dateStr},
+            {u"shareOpenid"_s, uidStr},
+            {u"shareboxid"_s, "1501"},
+            {u"shareid"_s, dateStr + uidStr + u"_16008_0"_s},
+            {u"shareserverid"_s, QString::number(conn->getWarzone())},
+            {u"sharetype"_s, "16008"},
+            {u"uid"_s, uidStr},
+            {u"userShareSDK"_s, "1"},
+        };
+        shareBoxCtx->shareBoxObj = QJsonObject{
+            {u"encryptedData"_s, u"encryptedData"_s},
+            {u"id"_s, 1501},
+            {u"iv"_s, u"iv"_s},
+            {u"uid"_s, uidStr},
+            {u"query"_s, query}
+        };
+
+        const auto& server = shareBoxCtx->changeServerQueue.front();
+        conn->changeServer(server.serverId, server.uid, server.serverUrl);
+        logoutTimer.stop();
+        runTaskTimer.stop();
+        scheduleTaskMap.clear();
+    });
+}
+
+void TopwarHelper::handleShareBoxLogin() {
+    conn->sendClickShareBox(shareBoxCtx->shareBoxObj);
+    shareBoxCtx->changeServerQueue.pop_front();
+    if (!shareBoxCtx->changeServerQueue.empty()) {
+        const auto& server = shareBoxCtx->changeServerQueue.front();
+        conn->changeServer(server.serverId, server.uid, server.serverUrl);
+    } else {
+        const auto& server = shareBoxCtx->origServer;
+        conn->changeServer(server.serverId, server.uid, server.serverUrl);
+        shareBoxCtx.reset();
+    }
 }

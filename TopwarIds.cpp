@@ -4,6 +4,8 @@ static QString _s;
 
 QString getItemName(int itemId) {
     switch (itemId) {
+    case 200003:  return u"迁城"_s;
+
     case 1000005: return u"钻石50"_s;
     case 1000006: return u"钻石100"_s;
 
